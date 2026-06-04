@@ -1,0 +1,1275 @@
+<!DOCTYPE html>
+<!--
+  PCR READINESS COMMAND CENTER  v4.1  (Hardened Edition)
+
+  CHANGES FROM v4.0:
+  - AES-256-GCM encryption for shared file (Web Crypto API, PBKDF2 key derivation)
+  - Session password stored in sessionStorage; cleared on tab close
+  - Content-Security-Policy meta blocks all external requests
+  - Duplicate-ID guard in all save functions (PCR, Component, Exception)
+  - Import validation tightened: gates sub-object checked, record count capped (500/array)
+  - Input maxlength enforced on all form fields
+  - uid() uses crypto.getRandomValues for better randomness
+  - export/import both support encrypted files
+  - rel="noopener noreferrer" on generated download anchor
+  - CSP prevents any network call — fully usable on restricted/air-gapped networks
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<!-- CSP: block all external requests; this tool is fully self-contained -->
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none';">
+<title>PCR Readiness Command Center</title>
+<style>
+:root {
+  --bg:#07090f; --bg2:#0d1220; --bg3:#111827; --bg4:#182030; --bg5:#1e293b;
+  --border:#1e2d42; --border2:#2a3a54;
+  --accent:#0ea5e9; --accentd:#0284c7;
+  --text:#e2e8f0; --textd:#64748b; --textm:#94a3b8;
+  --green:#22c55e; --greenbg:rgba(34,197,94,0.12);
+  --red:#ef4444; --redbg:rgba(239,68,68,0.13);
+  --amber:#f59e0b; --amberbg:rgba(245,158,11,0.12);
+  --orange:#f97316; --oranbg:rgba(249,115,22,0.12);
+  --blue:#3b82f6; --bluebg:rgba(59,130,246,0.12);
+  --sky:#0ea5e9; --skybg:rgba(14,165,233,0.12);
+  --gray:#475569; --graybg:rgba(71,85,105,0.15);
+  --font:'Segoe UI', system-ui, -apple-system, sans-serif;
+  --mono:'Consolas','Courier New', monospace;
+}
+*, *::before, *::after { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color: rgba(14,165,233,0.25); }
+html { height:100%; -webkit-text-size-adjust:100%; }
+body {
+  background:var(--bg); color:var(--text); font-family:var(--font);
+  font-size:13px; line-height:1.5; min-height:100%; overflow-x:hidden;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+button, input, select, textarea { font-family:inherit; }
+
+::-webkit-scrollbar { width:5px; height:5px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--border2); border-radius:3px; }
+
+#toast {
+  position:fixed; bottom:calc(20px + env(safe-area-inset-bottom)); left:50%;
+  transform:translateX(-50%); z-index:9999;
+  background:var(--bg4); border:1px solid var(--border2);
+  border-radius:7px; padding:11px 18px; font-size:12px;
+  color:var(--text); max-width:90vw; display:none; text-align:center;
+  box-shadow:0 8px 24px rgba(0,0,0,0.45);
+}
+#toast.err { border-color:var(--red); color:var(--red); }
+#toast.ok  { border-color:var(--green); color:var(--green); }
+
+.hd {
+  background:var(--bg2); border-bottom:1px solid var(--border);
+  padding:10px 16px; display:flex; align-items:center; justify-content:space-between;
+  position:sticky; top:0; z-index:200; gap:10px; flex-wrap:wrap;
+  padding-top:calc(10px + env(safe-area-inset-top));
+}
+.hd-brand { display:flex; align-items:center; gap:10px; }
+.hd-logo {
+  width:34px; height:34px; background:linear-gradient(135deg,var(--accent),#6366f1);
+  border-radius:7px; display:flex; align-items:center; justify-content:center;
+  font-weight:900; font-size:11px; color:#fff; font-family:var(--mono);
+}
+.hd-title { font-size:14px; font-weight:700; }
+.hd-sub { font-size:10px; color:var(--textd); margin-top:1px; }
+.hd-right { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.hd-ts { font-family:var(--mono); font-size:10px; color:var(--textd); }
+
+.fstat { display:inline-flex; align-items:center; gap:6px; font-size:10px; font-family:var(--mono); padding:5px 9px; border-radius:5px; border:1px solid var(--border2); color:var(--textd); }
+.fstat .dot { width:7px; height:7px; border-radius:50%; background:var(--gray); flex-shrink:0; }
+.fstat.live { color:var(--green); border-color:rgba(34,197,94,0.4); }
+.fstat.live .dot { background:var(--green); }
+.fstat.local { color:var(--amber); border-color:rgba(245,158,11,0.4); }
+.fstat.local .dot { background:var(--amber); }
+
+.btn {
+  padding:9px 14px; border-radius:6px; border:none; cursor:pointer;
+  font-size:12px; font-weight:600; display:inline-flex; align-items:center;
+  gap:5px; white-space:nowrap; min-height:38px; user-select:none;
+  -webkit-user-select:none; touch-action:manipulation;
+}
+.btn-p { background:var(--accent); color:#fff; }
+.btn-p:active { background:var(--accentd); }
+.btn-g { background:transparent; color:var(--textm); border:1px solid var(--border2); }
+.btn-g:active { background:var(--bg4); color:var(--text); }
+.btn-d { background:transparent; color:var(--red); border:1px solid var(--border2); }
+.btn-d:active { background:var(--redbg); border-color:var(--red); }
+.btn-s { background:var(--green); color:#000; }
+.btn-s:active { opacity:0.85; }
+.btn-enc { background:transparent; color:var(--amber); border:1px solid rgba(245,158,11,0.4); }
+.btn-enc.active { color:var(--green); border-color:rgba(34,197,94,0.4); }
+.btn-sm { padding:7px 11px; font-size:11px; min-height:34px; }
+.btn-xs { padding:6px 10px; font-size:11px; min-height:32px; }
+
+.tabs {
+  background:var(--bg2); border-bottom:1px solid var(--border);
+  display:flex; padding:0 8px; gap:0; overflow-x:auto; -webkit-overflow-scrolling:touch;
+}
+.tab {
+  padding:12px 14px; border:none; background:transparent; color:var(--textd);
+  cursor:pointer; font-size:11px; font-weight:700;
+  border-bottom:2px solid transparent; margin-bottom:-1px;
+  text-transform:uppercase; letter-spacing:0.6px; white-space:nowrap;
+  touch-action:manipulation; min-height:44px;
+}
+.tab.on { color:var(--accent); border-bottom-color:var(--accent); }
+
+.pane { display:none; padding:16px; }
+.pane.on { display:block; }
+
+.kpi-row { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:16px; }
+.kpi { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:14px 16px; position:relative; overflow:hidden; }
+.kpi::after { content:''; position:absolute; top:0; left:0; right:0; height:2px; }
+.kpi.sky::after{background:var(--sky)} .kpi.grn::after{background:var(--green)}
+.kpi.red::after{background:var(--red)} .kpi.amb::after{background:var(--amber)}
+.kpi-lbl { font-size:9px; text-transform:uppercase; letter-spacing:1px; color:var(--textd); margin-bottom:8px; }
+.kpi-val { font-size:30px; font-weight:900; font-family:var(--mono); line-height:1; }
+.kpi.sky .kpi-val{color:var(--sky)} .kpi.grn .kpi-val{color:var(--green)}
+.kpi.red .kpi-val{color:var(--red)} .kpi.amb .kpi-val{color:var(--amber)}
+.kpi-sub { font-size:10px; color:var(--textd); margin-top:4px; }
+
+.chart-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:16px; }
+.chart-card { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:14px; }
+.chart-lbl { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.9px; color:var(--textd); margin-bottom:12px; }
+
+.panel { background:var(--bg3); border:1px solid var(--border); border-radius:8px; overflow:hidden; margin-bottom:14px; }
+.panel-hd { background:var(--bg4); border-bottom:1px solid var(--border); padding:10px 14px; display:flex; justify-content:space-between; align-items:center; gap:10px; }
+.panel-title { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.7px; }
+.toolbar { padding:10px 14px; border-bottom:1px solid var(--border); display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.srch { background:var(--bg2); border:1px solid var(--border2); border-radius:5px; color:var(--text); font-size:13px; padding:9px 10px; width:200px; min-height:38px; -webkit-appearance:none; }
+.srch::placeholder { color:var(--textd); }
+.srch:focus { outline:none; border-color:var(--accent); }
+.tbl-wrap { overflow-x:auto; max-height:460px; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+table { width:100%; border-collapse:collapse; font-size:11px; }
+thead { position:sticky; top:0; z-index:10; }
+th { background:var(--bg4); border-bottom:1px solid var(--border2); padding:8px 10px; text-align:left; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.8px; color:var(--textd); white-space:nowrap; }
+td { padding:9px 10px; border-bottom:1px solid var(--border); vertical-align:middle; white-space:nowrap; }
+tbody tr:last-child td { border-bottom:none; }
+
+.badge { display:inline-block; padding:3px 7px; border-radius:3px; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; }
+.b-comp{background:var(--greenbg);color:var(--green)} .b-blk{background:var(--redbg);color:var(--red)}
+.b-ip{background:var(--amberbg);color:var(--amber)} .b-ns{background:var(--graybg);color:var(--gray)}
+.b-na{background:var(--bluebg);color:var(--blue)} .b-yes{background:var(--greenbg);color:var(--green)}
+.b-no{background:var(--redbg);color:var(--red)} .b-crit{background:var(--redbg);color:var(--red)}
+.b-high{background:var(--oranbg);color:var(--orange)} .b-med{background:var(--amberbg);color:var(--amber)}
+.b-low{background:var(--skybg);color:var(--sky)} .b-open{background:var(--amberbg);color:var(--amber)}
+.b-esc{background:var(--redbg);color:var(--red)} .b-mon{background:var(--skybg);color:var(--sky)}
+.b-res{background:var(--greenbg);color:var(--green)} .b-avl{background:var(--greenbg);color:var(--green)}
+.b-rsv{background:var(--amberbg);color:var(--amber)} .b-ins{background:var(--skybg);color:var(--sky)}
+.b-ret{background:var(--graybg);color:var(--gray)}
+
+.gate-dots { display:flex; gap:2px; align-items:center; }
+.gdot { width:10px; height:10px; border-radius:2px; display:inline-block; flex-shrink:0; }
+
+.rbar { display:flex; align-items:center; gap:6px; min-width:100px; }
+.rtrack { flex:1; height:6px; background:var(--border); border-radius:3px; overflow:hidden; }
+.rfill { height:100%; border-radius:3px; }
+.rpct { font-family:var(--mono); font-size:10px; color:var(--textd); min-width:30px; text-align:right; }
+
+.empty { text-align:center; padding:36px 20px; color:var(--textd); }
+.empty-ico { font-size:28px; margin-bottom:8px; }
+.empty p { font-size:11px; }
+.mono { font-family:var(--mono); font-size:10px; }
+.act-cell { display:flex; gap:6px; }
+
+.overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.72); z-index:500; align-items:flex-start; justify-content:center; padding:16px; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+.overlay.on { display:flex; }
+.modal { background:var(--bg3); border:1px solid var(--border2); border-radius:10px; width:100%; max-width:940px; margin:auto; box-shadow:0 24px 64px rgba(0,0,0,0.55); }
+.m-hd { padding:14px 18px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+.m-title { font-size:13px; font-weight:700; }
+.m-body { padding:18px; overflow-y:auto; max-height:70vh; -webkit-overflow-scrolling:touch; }
+.m-ft { padding:12px 18px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
+.xbtn { background:none; border:none; color:var(--textd); cursor:pointer; font-size:24px; line-height:1; padding:6px 10px; min-height:44px; min-width:44px; touch-action:manipulation; }
+
+.cdlg-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.78); z-index:900; align-items:center; justify-content:center; padding:20px; }
+.cdlg-overlay.on { display:flex; }
+.cdlg { background:var(--bg3); border:1px solid var(--border2); border-radius:10px; width:100%; max-width:440px; box-shadow:0 24px 64px rgba(0,0,0,0.6); }
+.cdlg-body { padding:20px; font-size:13px; color:var(--text); line-height:1.6; white-space:pre-wrap; }
+.cdlg-ft { padding:12px 18px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
+
+.fsec { margin-bottom:18px; }
+.fsec-t { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:1px; color:var(--accent); margin-bottom:10px; padding-bottom:5px; border-bottom:1px solid var(--border); }
+.fgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:10px; }
+.fg { display:flex; flex-direction:column; gap:4px; }
+.fg.full { grid-column:1/-1; }
+label { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--textd); }
+input, select, textarea { background:var(--bg2); border:1px solid var(--border2); border-radius:5px; color:var(--text); font-size:16px; padding:10px; width:100%; -webkit-appearance:none; appearance:none; min-height:42px; }
+select { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748b'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center; padding-right:30px; }
+input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); }
+textarea { resize:vertical; min-height:60px; }
+select option { background:var(--bg2); }
+
+.gate-fg { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; }
+.gate-fc { background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:11px; }
+.gate-fc .fsec-t { font-size:9px; margin-bottom:8px; padding-bottom:4px; }
+.gate-fc .fg { margin-bottom:8px; }
+
+.instr { max-width:860px; }
+.instr-sec { margin-bottom:24px; }
+.instr-sec h2 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.8px; color:var(--accent); margin-bottom:12px; padding-bottom:5px; border-bottom:1px solid var(--border); }
+.instr-sec p, .instr-sec li { font-size:12px; color:var(--textm); line-height:1.75; margin-bottom:6px; }
+.instr-sec ul { padding-left:16px; }
+.instr-sec strong { color:var(--text); }
+.instr-sec code { font-family:var(--mono); font-size:10px; background:var(--bg4); border:1px solid var(--border2); border-radius:3px; padding:1px 5px; color:var(--sky); }
+.instr-pill { display:inline-block; font-size:10px; font-weight:700; background:var(--bg4); border:1px solid var(--border2); border-radius:4px; padding:2px 7px; color:var(--textm); white-space:nowrap; }
+.instr-steps { display:flex; flex-direction:column; gap:8px; }
+.instr-step { display:flex; gap:12px; align-items:flex-start; background:var(--bg4); border:1px solid var(--border); border-radius:6px; padding:11px 14px; }
+.step-num { width:22px; height:22px; flex-shrink:0; background:var(--accent); border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:900; color:#fff; font-family:var(--mono); margin-top:1px; }
+.step-body { font-size:12px; color:var(--textm); line-height:1.7; }
+.step-body strong { color:var(--text); }
+.instr-tabgrid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.instr-tabcard { background:var(--bg4); border:1px solid var(--border); border-radius:6px; padding:13px 14px; }
+.itc-name { font-size:11px; font-weight:700; color:var(--sky); margin-bottom:2px; }
+.itc-role { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--textd); margin-bottom:8px; }
+.itc-desc { font-size:11px; color:var(--textm); line-height:1.65; }
+.dot-legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:4px; }
+.dl-item { display:flex; align-items:center; gap:7px; font-size:12px; color:var(--textm); }
+.gate-ref-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:8px; }
+.gate-ref-item { background:var(--bg4); border:1px solid var(--border); border-radius:5px; padding:9px 11px; }
+.gate-ref-lbl { display:block; font-size:10px; font-weight:700; color:var(--sky); margin-bottom:4px; font-family:var(--mono); }
+.gate-ref-desc { font-size:11px; color:var(--textm); line-height:1.5; }
+.ref-pair-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+.ref-pair-grid li { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--textm); margin-bottom:8px; list-style:none; }
+
+.red-text{color:var(--red)} .amb-text{color:var(--amber)} .dim-text{color:var(--textd)} .grn-text{color:var(--green)}
+.divider { height:1px; background:var(--border); margin:12px 0; }
+.notice { background:var(--skybg); border:1px solid rgba(14,165,233,0.25); border-radius:6px; padding:9px 13px; font-size:11px; color:var(--textm); margin-bottom:14px; }
+
+@media (max-width:720px) {
+  .kpi-row { grid-template-columns:1fr 1fr; }
+  .chart-row { grid-template-columns:1fr; }
+  .instr-tabgrid, .ref-pair-grid { grid-template-columns:1fr; }
+  .srch { width:100%; }
+  .hd-sub { display:none; }
+}
+</style>
+</head>
+<body>
+
+<noscript>
+  <div style="position:fixed;inset:0;background:#07090f;color:#ef4444;display:flex;align-items:center;justify-content:center;font-family:sans-serif;font-size:15px;text-align:center;z-index:99999;padding:20px;">
+    <div><div style="font-size:32px;margin-bottom:12px">&#9888;</div>
+    <strong>JavaScript is required.</strong><br>Please enable JavaScript, then reload.</div>
+  </div>
+</noscript>
+
+<div id="storage-banner" style="display:none;background:#7c2d12;color:#fef3c7;font-size:11px;padding:7px 16px;text-align:center;position:sticky;top:0;z-index:300;border-bottom:1px solid #b45309;" role="alert">
+  &#9888; <strong id="storage-banner-msg"></strong>
+</div>
+
+<div id="toast" role="alert" aria-live="assertive"></div>
+
+<!-- HEADER -->
+<div class="hd">
+  <div class="hd-brand">
+    <div class="hd-logo">PCR</div>
+    <div>
+      <div class="hd-title">PCR Readiness Command Center</div>
+      <div class="hd-sub">v4.1 Hardened &mdash; Shared-file &amp; encrypted &mdash; Chrome / Edge on Windows</div>
+    </div>
+  </div>
+  <div class="hd-right">
+    <span class="fstat" id="fstat"><span class="dot"></span><span id="fstat-txt">No file open</span></span>
+    <span class="hd-ts" id="hd-ts">&mdash;</span>
+    <button class="btn btn-enc btn-sm" id="btn-setpass" title="Set or clear the file encryption password">&#128274; Set Password</button>
+    <button class="btn btn-p btn-sm" id="btn-openfile" title="Open the shared data file">&#128194; Open shared file</button>
+    <button class="btn btn-g btn-sm" id="btn-reload" title="Reload latest from shared file" style="display:none">&#8635; Reload</button>
+    <button class="btn btn-g btn-sm" id="btn-import" title="Import JSON backup">&#8679; Import</button>
+    <button class="btn btn-g btn-sm" id="btn-export" title="Export JSON backup">&#8681; Export</button>
+    <input type="file" id="filePicker" accept=".json,application/json" style="display:none">
+  </div>
+</div>
+
+<!-- TABS -->
+<div class="tabs">
+  <button class="tab on" data-tab="dash">Dashboard</button>
+  <button class="tab" data-tab="pcr">PCR Tool</button>
+  <button class="tab" data-tab="comp">Component Inventory</button>
+  <button class="tab" data-tab="exc">Exceptions Log</button>
+  <button class="tab" data-tab="instr">Instructions</button>
+</div>
+
+<!-- DASHBOARD -->
+<div id="pane-dash" class="pane on">
+  <div class="kpi-row">
+    <div class="kpi sky"><div class="kpi-lbl">Total Active PCRs</div><div class="kpi-val" id="k-total">0</div><div class="kpi-sub">Records in system</div></div>
+    <div class="kpi amb"><div class="kpi-lbl">Avg. Readiness</div><div class="kpi-val" id="k-avg">0%</div><div class="kpi-sub">Across all PCRs</div></div>
+    <div class="kpi red"><div class="kpi-lbl">Critical Blockers</div><div class="kpi-val" id="k-crit">0</div><div class="kpi-sub">Open exceptions</div></div>
+    <div class="kpi grn"><div class="kpi-lbl">Ready to Install</div><div class="kpi-val" id="k-ready">0</div><div class="kpi-sub">All gates complete</div></div>
+  </div>
+  <div class="chart-row">
+    <div class="chart-card"><div class="chart-lbl">Blocked PCRs by Gate</div>
+      <svg id="chBlk" viewBox="0 0 400 160" width="100%" height="160" preserveAspectRatio="xMidYMid meet"></svg></div>
+    <div class="chart-card"><div class="chart-lbl">Readiness Distribution</div>
+      <svg id="chRdy" viewBox="0 0 360 160" width="100%" height="160" preserveAspectRatio="xMidYMid meet"></svg></div>
+  </div>
+  <div class="panel">
+    <div class="panel-hd"><span class="panel-title">&#9888; Overdue &amp; Blocked Queue</span></div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>PCR ID</th><th>Equipment</th><th>Component</th><th>Forecast</th><th>Readiness</th><th>Bottleneck</th><th>Ready</th></tr></thead>
+      <tbody id="tb-odue"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<!-- PCR TOOL -->
+<div id="pane-pcr" class="pane">
+  <div class="panel">
+    <div class="panel-hd"><span class="panel-title">PCR Tracker</span>
+      <button class="btn btn-p btn-sm" data-action="add-pcr">+ Add PCR</button></div>
+    <div class="toolbar">
+      <input class="srch" id="pcr-srch" placeholder="Search PCR ID, Equipment, Component&hellip;" maxlength="100">
+      <select class="srch" id="pcr-flt" style="width:150px">
+        <option value="">All Statuses</option>
+        <option>Not Started</option><option>In Progress</option><option>Blocked</option><option>Complete</option>
+      </select>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>PCR ID</th><th>Equipment</th><th>Component</th><th>Forecast</th><th>WO #</th><th>Gates</th><th>Readiness</th><th>Bottleneck</th><th>Ready</th><th>Updated</th><th>Actions</th></tr></thead>
+      <tbody id="tb-pcr"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<!-- COMPONENT INVENTORY -->
+<div id="pane-comp" class="pane">
+  <div class="panel">
+    <div class="panel-hd"><span class="panel-title">Component Inventory</span>
+      <button class="btn btn-p btn-sm" data-action="add-comp">+ Add Component</button></div>
+    <div class="toolbar"><input class="srch" id="comp-srch" placeholder="Search components&hellip;" maxlength="100"></div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Component ID</th><th>Name</th><th>Equipment Type</th><th>Location</th><th>Status</th><th>Last Insp.</th><th>Qty</th><th>Lead Time</th><th>Supplier</th><th>Next Insp.</th><th>Notes</th><th>Actions</th></tr></thead>
+      <tbody id="tb-comp"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<!-- EXCEPTIONS LOG -->
+<div id="pane-exc" class="pane">
+  <div class="panel">
+    <div class="panel-hd"><span class="panel-title">Exceptions Log</span>
+      <button class="btn btn-p btn-sm" data-action="add-exc">+ Log Exception</button></div>
+    <div class="toolbar">
+      <input class="srch" id="exc-srch" placeholder="Search exceptions&hellip;" maxlength="100">
+      <select class="srch" id="exc-sev" style="width:140px">
+        <option value="">All Severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option>
+      </select>
+      <select class="srch" id="exc-esc" style="width:140px">
+        <option value="">All Statuses</option><option>Open</option><option>Monitoring</option><option>Escalated</option><option>Resolved</option>
+      </select>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Exc. ID</th><th>PCR ID</th><th>Gate</th><th>Blocker Type</th><th>Severity</th><th>Owner</th><th>Open Date</th><th>Age (Days)</th><th>Escalation</th><th>Resolution Date</th><th>Actions</th></tr></thead>
+      <tbody id="tb-exc"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<!-- INSTRUCTIONS -->
+<div id="pane-instr" class="pane">
+  <div class="instr">
+    <div class="notice">&#128214; <strong>How to use this tool.</strong> This version stores all data in a <strong>single shared JSON file</strong>. Optionally encrypt it with a team password using the <strong>&#128274; Set Password</strong> button before saving. Read the Shared-File Setup section first.</div>
+
+    <div class="instr-sec"><h2>&#11088; Shared-File Setup (read this first)</h2>
+      <div class="instr-steps">
+        <div class="instr-step"><div class="step-num">1</div><div class="step-body"><strong>Put two files in your team's shared folder:</strong> this <code>.html</code> file and the <code>pcr-data.json</code> file. They can sit side by side in the shared OneDrive/SharePoint folder everyone can reach.</div></div>
+        <div class="instr-step"><div class="step-num">2</div><div class="step-body"><strong>Open the .html in Chrome or Edge on Windows.</strong> (The shared-file feature is not available in iPhone/iPad Safari &mdash; those devices fall back to a local, non-synced copy.)</div></div>
+        <div class="instr-step"><div class="step-num">3</div><div class="step-body"><strong>Optional &mdash; set encryption:</strong> click <span class="instr-pill">&#128274; Set Password</span> and enter your team's shared password. All teammates must use the same password. Share it securely out-of-band.</div></div>
+        <div class="instr-step"><div class="step-num">4</div><div class="step-body"><strong>Click <span class="instr-pill">&#128194; Open shared file</span></strong> and select <code>pcr-data.json</code>. The status pill at the top turns green. You only do this once per session.</div></div>
+        <div class="instr-step"><div class="step-num">5</div><div class="step-body"><strong>Work normally.</strong> Every Save writes straight to the shared file. Use <span class="instr-pill">&#8635; Reload</span> to pull the latest if you've had it open a while.</div></div>
+        <div class="instr-step"><div class="step-num">6</div><div class="step-body"><strong>One editor at a time is safest.</strong> The tool warns you if the file changed since you opened it &mdash; click Reload before saving if you see that warning.</div></div>
+      </div>
+    </div>
+
+    <div class="instr-sec"><h2>Quick Start &mdash; Adding Records</h2>
+      <div class="instr-steps">
+        <div class="instr-step"><div class="step-num">1</div><div class="step-body"><strong>Open the PCR Tool tab</strong> and tap <span class="instr-pill">+ Add PCR</span>. Fill in the PCR ID, equipment, component, forecast date, and WO number.</div></div>
+        <div class="instr-step"><div class="step-num">2</div><div class="step-body"><strong>Set each gate's status</strong> (G1&ndash;G9) using the dropdown inside each gate card. Add the owner and notes.</div></div>
+        <div class="instr-step"><div class="step-num">3</div><div class="step-body"><strong>Tap Save Record.</strong> The PCR appears with a live readiness bar and color-coded gate dots.</div></div>
+        <div class="instr-step"><div class="step-num">4</div><div class="step-body"><strong>If any gate is Blocked</strong>, go to the Exceptions Log and tap <span class="instr-pill">+ Log Exception</span> within 4 hours.</div></div>
+      </div>
+    </div>
+
+    <div class="instr-sec"><h2>What Each Tab Does</h2>
+      <div class="instr-tabgrid">
+        <div class="instr-tabcard"><div class="itc-name">Dashboard</div><div class="itc-role">Read-only &middot; Auto-refreshes</div><div class="itc-desc">Live summary: total PCRs, average readiness, open critical blockers, and ready-to-install count, plus a blocked-gates bar chart, a readiness donut, and the Overdue &amp; Blocked Queue.</div></div>
+        <div class="instr-tabcard"><div class="itc-name">PCR Tool</div><div class="itc-role">Primary edit view &middot; Gate owners</div><div class="itc-desc">Add, edit, and delete PCR records. Each row shows a nine-dot gate strip, readiness bar, bottleneck gate, and ready status. Search and filter by status.</div></div>
+        <div class="instr-tabcard"><div class="itc-name">Component Inventory</div><div class="itc-role">Logistics / materials</div><div class="itc-desc">Catalog of physical components: location, status, quantity, lead time, supplier, inspection dates. Low qty highlights amber; overdue inspections highlight red; retired rows dim.</div></div>
+        <div class="instr-tabcard"><div class="itc-name">Exceptions Log</div><div class="itc-role">Gate owners &middot; Supervisors</div><div class="itc-desc">Log blockers, link to PCR ID and gate, assign severity and owner, track Open &rarr; Monitoring &rarr; Escalated &rarr; Resolved. Items open &gt;7 days show age in red.</div></div>
+      </div>
+    </div>
+
+    <div class="instr-sec"><h2>Reading the Gate Dot Strip</h2>
+      <p style="margin-bottom:10px">Each PCR row shows 9 colored squares (G1 &rarr; G9). Hover a dot to see its name and status.</p>
+      <div class="dot-legend">
+        <div class="dl-item"><span class="gdot" style="background:#1e2d42"></span> <span>Not Started / blank</span></div>
+        <div class="dl-item"><span class="gdot" style="background:#f59e0b"></span> <span>In Progress</span></div>
+        <div class="dl-item"><span class="gdot" style="background:#ef4444"></span> <span>Blocked</span></div>
+        <div class="dl-item"><span class="gdot" style="background:#22c55e"></span> <span>Complete</span></div>
+        <div class="dl-item"><span class="gdot" style="background:#3b82f6"></span> <span>N/A</span></div>
+      </div>
+      <p style="margin-top:10px">The <strong>Bottleneck</strong> column is the first gate not Complete or N/A. <strong>Ready = Yes</strong> only when all 9 dots are green or blue.</p>
+    </div>
+    <div class="divider"></div>
+    <div class="instr-sec"><h2>Gates Reference (G1&ndash;G9)</h2>
+      <div class="gate-ref-grid">
+        <div class="gate-ref-item"><span class="gate-ref-lbl">G1 Scope</span><span class="gate-ref-desc">Work scope defined, signed off, baselined.</span></div>
+        <div class="gate-ref-item"><span class="gate-ref-lbl">G2 Parts</span><span class="gate-ref-desc">All replacement parts staged and inspected.</span></div>
+        <div class="gate-ref-item"><span class="gate-ref-lbl">G3 Tools</span><span class="gate-ref-desc">Specialty tooling confirmed and on-site.</span></div>
+        <div class="gate-ref-item"><span class="gate-ref-lbl">G4 Crane</span><span class="gate-ref-desc">Lifting equipment scheduled; rigging plan approved.</span></div>
+        <div class="gate-ref-item"><span class="gate-ref-lbl">G5 Logistics</span><span class="gate-ref-desc">Transport, access, permits confirmed.</span></div>
+        <div class="gate-ref-item"><span class="gate-ref-lbl">G6 Machining</span><span class="gate-ref-desc">Machining/fabrication completed and QC'd.</span></div>
+        <div class="gate-ref-item"><span class="gate-ref-lbl">G7 Staging</span><span class="gate-ref-desc">Equipment and materials staged in install area.</span></div>
+        <div class="gate-ref-item"><span class="gate-ref-lbl">G8 Execution</span><span class="gate-ref-desc">Crew, contractors, schedule confirmed.</span></div>
+        <div class="gate-ref-item"><span class="gate-ref-lbl">G9 QC</span><span class="gate-ref-desc">Quality control plan in place; inspector assigned.</span></div>
+      </div>
+    </div>
+    <div class="instr-sec"><h2>Status &amp; Severity Quick Reference</h2>
+      <div class="ref-pair-grid">
+        <div><p style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--textd);margin-bottom:8px">Gate Status</p><ul>
+          <li><span class="badge b-ns">Not Started</span> Work not begun. Default.</li>
+          <li><span class="badge b-ip">In Progress</span> Active work; update weekly.</li>
+          <li><span class="badge b-blk">Blocked</span> Cannot proceed. Log exception within 4h.</li>
+          <li><span class="badge b-comp">Complete</span> Criteria met and verified.</li>
+          <li><span class="badge b-na">N/A</span> Not applicable. Reason in notes.</li>
+        </ul></div>
+        <div><p style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--textd);margin-bottom:8px">Exception Severity</p><ul>
+          <li><span class="badge b-crit">Critical</span> Delays install in 24&ndash;48h.</li>
+          <li><span class="badge b-high">High</span> Delays install within the week.</li>
+          <li><span class="badge b-med">Medium</span> Risk of delay; monitor daily.</li>
+          <li><span class="badge b-low">Low</span> Informational; no schedule impact.</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- EDIT MODAL -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <div class="m-hd"><span class="m-title" id="m-title">&mdash;</span><button class="xbtn" id="m-close">&times;</button></div>
+    <div class="m-body" id="m-body"></div>
+    <div class="m-ft">
+      <button class="btn btn-g" id="m-cancel">Cancel</button>
+      <button class="btn btn-s" id="m-save">Save Record</button>
+    </div>
+  </div>
+</div>
+
+<!-- CUSTOM CONFIRM / INPUT DIALOG -->
+<div class="cdlg-overlay" id="cdlg">
+  <div class="cdlg">
+    <div class="cdlg-body" id="cdlg-body"></div>
+    <div class="cdlg-ft" id="cdlg-ft"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ── CONSTANTS ──
+var SK = 'pcr_cmd_v1';
+var GATES = [
+  {id:'g1',lbl:'G1 Scope'},{id:'g2',lbl:'G2 Parts'},{id:'g3',lbl:'G3 Tools'},
+  {id:'g4',lbl:'G4 Crane'},{id:'g5',lbl:'G5 Logistics'},{id:'g6',lbl:'G6 Machining'},
+  {id:'g7',lbl:'G7 Staging'},{id:'g8',lbl:'G8 Execution'},{id:'g9',lbl:'G9 QC'}
+];
+var GATE_IDS = GATES.map(function(g){return g.id;});
+var GATE_STATUS_VALS = ['','Not Started','In Progress','Blocked','Complete','N/A'];
+var GATE_FIELDS = ['status','owner','notes'];
+var S_STATUS = ['','Not Started','In Progress','Blocked','Complete','N/A'];
+var S_SEV    = ['','Critical','High','Medium','Low'];
+var S_ESC    = ['','Open','Monitoring','Escalated','Resolved'];
+var S_CSTATUS= ['','Available','Reserved','In Service','Retired'];
+var IMPORT_MAX_STR     = 2000;   // max chars per string field in imported JSON
+var IMPORT_MAX_RECORDS = 500;    // max records per array in imported JSON
+
+// ── CRYPTO SUPPORT ──
+var CRYPTO_SUPPORTED = (
+  typeof window.crypto !== 'undefined' &&
+  typeof window.crypto.subtle !== 'undefined' &&
+  typeof window.crypto.getRandomValues === 'function'
+);
+
+// Session password: lives only in sessionStorage (cleared on tab close)
+var sessionPass = '';
+try { sessionPass = sessionStorage.getItem('pcr_enc_pass') || ''; } catch(e) {}
+
+function b64ToArr(b64) {
+  return Uint8Array.from(atob(b64), function(c){ return c.charCodeAt(0); });
+}
+function arrToB64(arr) {
+  var bytes = new Uint8Array(arr), out = '';
+  for (var i = 0; i < bytes.length; i++) out += String.fromCharCode(bytes[i]);
+  return btoa(out);
+}
+async function deriveKey(pass, salt) {
+  var enc = new TextEncoder();
+  var km = await crypto.subtle.importKey('raw', enc.encode(pass), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name:'PBKDF2', salt:salt, iterations:100000, hash:'SHA-256' },
+    km,
+    { name:'AES-GCM', length:256 },
+    false,
+    ['encrypt','decrypt']
+  );
+}
+async function encryptObj(obj, pass) {
+  var salt = crypto.getRandomValues(new Uint8Array(16));
+  var iv   = crypto.getRandomValues(new Uint8Array(12));
+  var key  = await deriveKey(pass, salt);
+  var pt   = new TextEncoder().encode(JSON.stringify(obj));
+  var ct   = await crypto.subtle.encrypt({name:'AES-GCM', iv:iv}, key, pt);
+  return JSON.stringify({_v:2, enc:1, s:arrToB64(salt), i:arrToB64(iv), d:arrToB64(ct)});
+}
+async function decryptObj(text, pass) {
+  var o = JSON.parse(text);
+  if (!o.enc) return o;          // plain JSON — pass through
+  var salt = b64ToArr(o.s), iv = b64ToArr(o.i), ct = b64ToArr(o.d);
+  var key  = await deriveKey(pass, salt);
+  var pt   = await crypto.subtle.decrypt({name:'AES-GCM', iv:iv}, key, ct);
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+function setPass(p) {
+  sessionPass = p || '';
+  try {
+    if (sessionPass) sessionStorage.setItem('pcr_enc_pass', sessionPass);
+    else sessionStorage.removeItem('pcr_enc_pass');
+  } catch(e) {}
+  updateEncBtn();
+}
+function updateEncBtn() {
+  var btn = $('btn-setpass');
+  if (!btn) return;
+  if (sessionPass) {
+    btn.textContent = '🔒 Encrypted';
+    btn.className = 'btn btn-enc btn-sm active';
+    btn.title = 'File encryption is ON. Click to remove password.';
+  } else {
+    btn.textContent = '🔓 Set Password';
+    btn.className = 'btn btn-enc btn-sm';
+    btn.title = 'Set a team password to encrypt the shared file.';
+  }
+}
+
+// ── STORAGE MODE ──
+var FS_SUPPORTED = (typeof window.showOpenFilePicker === 'function');
+var storageMode  = FS_SUPPORTED ? 'file' : 'local';
+var fileHandle   = null;
+var lastKnownModified = 0;
+
+var db = {pcr:[], comp:[], exc:[]};
+
+function $(id){ return document.getElementById(id); }
+
+function showBanner(msg){ var b=$('storage-banner'),m=$('storage-banner-msg'); if(b&&m){m.textContent=msg;b.style.display='block';} }
+function hideBanner(){ var b=$('storage-banner'); if(b) b.style.display='none'; }
+
+function setFileStatus(){
+  var el=$('fstat'), txt=$('fstat-txt'), reload=$('btn-reload');
+  el.className='fstat';
+  if(storageMode==='file' && fileHandle){
+    el.classList.add('live');
+    txt.textContent = sessionPass ? 'Live (encrypted)' : 'Live (synced)';
+    reload.style.display='';
+  } else if(storageMode==='local'){
+    el.classList.add('local'); txt.textContent='Local only (not synced)';
+    reload.style.display='none';
+  } else {
+    txt.textContent='No file open'; reload.style.display='none';
+  }
+}
+
+// ── FALLBACK STORAGE (localStorage) ──
+var _storageOK = (function(){
+  try { var t='__pcr_probe__'; localStorage.setItem(t,'1'); localStorage.removeItem(t); return true; }
+  catch(e){ return false; }
+})();
+function loadLocal(){
+  if(!_storageOK){ db={pcr:[],comp:[],exc:[]}; return; }
+  try { var r=localStorage.getItem(SK); if(r) db=normalizeDB(JSON.parse(r)); }
+  catch(e){ db={pcr:[],comp:[],exc:[]}; }
+}
+function saveLocal(){
+  if(!_storageOK){ toast('⚠ Storage unavailable — export a backup.','err'); return; }
+  try { localStorage.setItem(SK, JSON.stringify(db)); }
+  catch(e){ toast('⚠ Storage save failed. Export a backup immediately.','err'); }
+}
+
+function normalizeDB(p){
+  if(!p || typeof p!=='object') p={};
+  if(!Array.isArray(p.pcr))  p.pcr=[];
+  if(!Array.isArray(p.comp)) p.comp=[];
+  if(!Array.isArray(p.exc))  p.exc=[];
+  return {pcr:p.pcr, comp:p.comp, exc:p.exc};
+}
+
+// ── SHARED-FILE STORAGE ──
+async function openSharedFile(){
+  try {
+    var handles = await window.showOpenFilePicker({
+      multiple: false,
+      types: [{description:'PCR data file', accept:{'application/json':['.json']}}]
+    });
+    fileHandle = handles[0];
+    var perm = await fileHandle.queryPermission({mode:'readwrite'});
+    if(perm !== 'granted'){
+      perm = await fileHandle.requestPermission({mode:'readwrite'});
+      if(perm !== 'granted'){ toast('❌ Read/write permission denied for that file.','err'); fileHandle=null; return; }
+    }
+    await readFromFile(true);
+    storageMode = 'file';
+    hideBanner();
+    setFileStatus();
+    go(curTab);
+    toast('✓ Connected to shared file — ' + fileHandle.name, 'ok');
+  } catch(err) {
+    if(err && err.name === 'AbortError') return;
+    toast('❌ Could not open file: ' + (err.message || err), 'err');
+  }
+}
+
+async function readFromFile(silent) {
+  if(!fileHandle) return;
+  try {
+    var file = await fileHandle.getFile();
+    lastKnownModified = file.lastModified;
+    var text = await file.text();
+    if(!text || text.trim() === '') { db={pcr:[],comp:[],exc:[]}; return; }
+
+    var parsed;
+    try { parsed = JSON.parse(text); }
+    catch(e) { toast('❌ File contains invalid JSON. It may be corrupt.','err'); return; }
+
+    // Handle encrypted file
+    if(parsed.enc === 1) {
+      if(!CRYPTO_SUPPORTED){ toast('❌ This browser does not support Web Crypto. Cannot decrypt.','err'); return; }
+      if(!sessionPass) {
+        // Prompt for password
+        cdlgInput(
+          'This file is encrypted.\nEnter the team password to open it:',
+          'Password…',
+          async function(pass){
+            if(!pass){ toast('❌ Password required to open encrypted file.','err'); fileHandle=null; setFileStatus(); return; }
+            try {
+              var dec = await decryptObj(text, pass);
+              db = normalizeDB(dec);
+              setPass(pass);
+              storageMode = 'file';
+              hideBanner();
+              setFileStatus();
+              if(!silent) toast('↻ Reloaded from encrypted shared file','ok');
+              go(curTab);
+            } catch(e2) {
+              toast('❌ Wrong password or corrupted file. Try again.','err');
+              fileHandle = null; setFileStatus();
+            }
+          },
+          { onCancel: function(){ fileHandle=null; setFileStatus(); } }
+        );
+        return;
+      }
+      // Already have session password — try it
+      try { parsed = await decryptObj(text, sessionPass); }
+      catch(e) { toast('❌ Decryption failed — wrong password? Click 🔓 to update.','err'); return; }
+    }
+
+    db = normalizeDB(parsed);
+    if(!silent) toast('↻ Reloaded latest from shared file','ok');
+  } catch(err) {
+    toast('❌ Could not read file: ' + (err.message || err), 'err');
+  }
+}
+
+async function fileChangedSinceLoad(){
+  if(!fileHandle) return false;
+  try { var file = await fileHandle.getFile(); return file.lastModified > lastKnownModified + 5; }
+  catch(e){ return false; }
+}
+
+async function writeToFile(){
+  if(!fileHandle) return false;
+  try {
+    var txt;
+    if(sessionPass && CRYPTO_SUPPORTED){
+      txt = await encryptObj(db, sessionPass);
+    } else {
+      txt = JSON.stringify(db, null, 2);
+    }
+    var writable = await fileHandle.createWritable();
+    await writable.write(txt);
+    await writable.close();
+    var file = await fileHandle.getFile();
+    lastKnownModified = file.lastModified;
+    return true;
+  } catch(err) {
+    toast('❌ Save to shared file failed: ' + (err.message || err), 'err');
+    return false;
+  }
+}
+
+// ── UNIFIED SAVE ──
+function persist(cb){
+  if(storageMode==='file' && fileHandle){
+    fileChangedSinceLoad().then(function(changed){
+      if(changed){
+        cdlgConfirm(
+          '⚠ The shared file was changed by someone else since you opened it.\n\n'+
+          'If you save now, your version will OVERWRITE their changes.\n\n'+
+          'Recommended: click "Reload Theirs" to pull their version first, then re-enter your change.',
+          function(){
+            writeToFile().then(function(ok){
+              if(ok) toast('✓ Saved (overwrote newer file)','ok');
+              if(cb) cb(ok);
+            });
+          },
+          { danger:true, okText:'Overwrite Anyway', cancelText:'Reload Theirs',
+            onCancel: function(){ readFromFile(false).then(function(){ go(curTab); if(cb) cb(false); }); }
+          }
+        );
+      } else {
+        writeToFile().then(function(ok){ if(cb) cb(ok); });
+      }
+    });
+  } else {
+    saveLocal();
+    if(cb) cb(true);
+  }
+}
+
+// ── UTILITIES ──
+function uid(pre){
+  var r;
+  try {
+    var a = crypto.getRandomValues(new Uint32Array(2));
+    r = (a[0].toString(36) + a[1].toString(36)).toUpperCase().slice(0,8);
+  } catch(e) {
+    r = Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2,6).toUpperCase();
+  }
+  return pre + '-' + r;
+}
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function ageDays(d){ if(!d) return null; var t=new Date(d); if(isNaN(t.getTime())) return null; return Math.max(0,Math.floor((Date.now()-t)/86400000)); }
+function isOver(d){ return d && d < todayStr(); }
+function gstatus(p,gid){ var g=(p.gates||{})[gid]; return g ? g.status : ''; }
+function calcR(p){ var done=0; for(var i=0;i<GATES.length;i++){ var s=gstatus(p,GATES[i].id); if(s==='Complete'||s==='N/A') done++; } return done/GATES.length; }
+function calcBN(p){ for(var i=0;i<GATES.length;i++){ var s=gstatus(p,GATES[i].id); if(s!=='Complete'&&s!=='N/A') return GATES[i].lbl; } return ''; }
+function calcRdy(p){ for(var i=0;i<GATES.length;i++){ var s=gstatus(p,GATES[i].id); if(s!=='Complete'&&s!=='N/A') return 'No'; } return 'Yes'; }
+function rColor(v){ if(v>=1) return '#22c55e'; if(v>=0.75) return '#0ea5e9'; if(v>=0.4) return '#f59e0b'; return '#ef4444'; }
+function pct(v){ return Math.round(v*100)+'%'; }
+// h(): HTML-escape user data before injecting into innerHTML
+function h(s){ if(s==null) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function opts(arr,val){ return arr.map(function(o){ return '<option'+(o===val?' selected':'')+'>'+h(o)+'</option>'; }).join(''); }
+
+function badgeYN(v){ return v==='Yes'?'<span class="badge b-yes">Yes</span>':'<span class="badge b-no">No</span>'; }
+function badgeSev(s){ var m={Critical:'b-crit',High:'b-high',Medium:'b-med',Low:'b-low'}; return s?'<span class="badge '+(m[s]||'')+'">'+h(s)+'</span>':'&mdash;'; }
+function badgeEsc(s){ var m={Open:'b-open',Monitoring:'b-mon',Escalated:'b-esc',Resolved:'b-res'}; return s?'<span class="badge '+(m[s]||'')+'">'+h(s)+'</span>':'&mdash;'; }
+function badgeCS(s){ var m={Available:'b-avl',Reserved:'b-rsv','In Service':'b-ins',Retired:'b-ret'}; return s?'<span class="badge '+(m[s]||'')+'">'+h(s)+'</span>':'&mdash;'; }
+function gateDots(p){
+  var cm={'Complete':'#22c55e','Blocked':'#ef4444','In Progress':'#f59e0b','Not Started':'#1e2d42','N/A':'#3b82f6','':'#1e2d42'};
+  return '<div class="gate-dots">'+GATES.map(function(g){ var s=gstatus(p,g.id)||''; return '<span class="gdot" style="background:'+(cm[s]||'#1e2d42')+'" title="'+h(g.lbl)+': '+h(s||'Not Started')+'"></span>'; }).join('')+'</div>';
+}
+function rbar(v){ return '<div class="rbar"><div class="rtrack"><div class="rfill" style="width:'+pct(v)+';background:'+rColor(v)+'"></div></div><span class="rpct">'+pct(v)+'</span></div>'; }
+
+// ── CUSTOM DIALOG ──
+function cdlgConfirm(msg, onYes, opt){
+  opt = opt || {};
+  var body=$('cdlg-body'), ft=$('cdlg-ft');
+  body.textContent = msg;   // textContent: safe, no XSS
+  ft.innerHTML = '';
+  if(!opt.alert){
+    var cancel = document.createElement('button');
+    cancel.className = 'btn btn-g';
+    cancel.textContent = opt.cancelText || 'Cancel';
+    cancel.addEventListener('click', function(){ $('cdlg').classList.remove('on'); if(opt.onCancel) opt.onCancel(); });
+    ft.appendChild(cancel);
+  }
+  var ok = document.createElement('button');
+  ok.className = opt.danger ? 'btn btn-d' : 'btn btn-p';
+  ok.textContent = opt.okText || (opt.alert ? 'OK' : 'Confirm');
+  ok.addEventListener('click', function(){ $('cdlg').classList.remove('on'); if(onYes) onYes(); });
+  ft.appendChild(ok);
+  $('cdlg').classList.add('on');
+}
+function cdlgAlert(msg){ cdlgConfirm(msg, null, {alert:true}); }
+
+// Password / text-input dialog (no innerHTML with user data)
+function cdlgInput(msg, placeholder, onOk, opt){
+  opt = opt || {};
+  var body=$('cdlg-body'), ft=$('cdlg-ft');
+  body.innerHTML = '';
+  var p = document.createElement('p');
+  p.style.cssText = 'margin-bottom:12px;font-size:13px;color:var(--text);white-space:pre-wrap;line-height:1.6';
+  p.textContent = msg;
+  var inp = document.createElement('input');
+  inp.type = 'password';
+  inp.autocomplete = 'off';
+  inp.placeholder = placeholder || '';
+  inp.maxLength = 200;
+  inp.style.cssText = 'width:100%;margin-top:8px;background:var(--bg2);border:1px solid var(--border2);border-radius:5px;color:var(--text);font-size:14px;padding:10px;min-height:42px;';
+  body.appendChild(p);
+  body.appendChild(inp);
+  ft.innerHTML = '';
+  if(!opt.noCancel){
+    var cancel = document.createElement('button');
+    cancel.className = 'btn btn-g';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', function(){ $('cdlg').classList.remove('on'); if(opt.onCancel) opt.onCancel(); });
+    ft.appendChild(cancel);
+  }
+  var ok = document.createElement('button');
+  ok.className = 'btn btn-p';
+  ok.textContent = opt.okText || 'OK';
+  function submit(){ $('cdlg').classList.remove('on'); if(onOk) onOk(inp.value); }
+  ok.addEventListener('click', submit);
+  inp.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); submit(); } });
+  ft.appendChild(ok);
+  $('cdlg').classList.add('on');
+  setTimeout(function(){ inp.focus(); }, 80);
+}
+
+// ── TAB ROUTING ──
+var curTab = 'dash';
+var renderers = {dash:renderDash, pcr:renderPCR, comp:renderComp, exc:renderExc, instr:function(){}};
+function go(tab){
+  var tabs = document.querySelectorAll('.tab');
+  for(var i=0;i<tabs.length;i++) tabs[i].classList.toggle('on', tabs[i].getAttribute('data-tab')===tab);
+  var panes = document.querySelectorAll('.pane');
+  for(var j=0;j<panes.length;j++) panes[j].classList.toggle('on', panes[j].id==='pane-'+tab);
+  curTab = tab;
+  if(renderers[tab]) renderers[tab]();
+}
+
+// ── DASHBOARD ──
+function renderDash(){
+  var total = db.pcr.length;
+  var avgR  = total ? db.pcr.reduce(function(a,p){ return a+calcR(p); },0)/total : 0;
+  var critB = db.exc.filter(function(e){ return e.severity==='Critical' && e.escStatus!=='Resolved'; }).length;
+  var rdyN  = db.pcr.filter(function(p){ return calcRdy(p)==='Yes'; }).length;
+  $('k-total').textContent = total;
+  $('k-avg').textContent   = pct(avgR);
+  $('k-crit').textContent  = critB;
+  $('k-ready').textContent = rdyN;
+  drawBlockerChart(); drawReadinessChart(); renderOverdue();
+}
+function drawBlockerChart(){
+  var W=400,H=160,pl=28,pr=8,pt=12,pb=36,iW=W-pl-pr,iH=H-pt-pb;
+  var counts = GATES.map(function(g){ return {lbl:g.id.toUpperCase(), n:db.pcr.filter(function(p){ return gstatus(p,g.id)==='Blocked'; }).length}; });
+  var maxC   = Math.max.apply(null, counts.map(function(c){ return c.n; }).concat([1]));
+  var bW = iW/counts.length, out='';
+  for(var i=0;i<=maxC;i++){ var y=pt+iH-(i/maxC)*iH; out+='<line x1="'+pl+'" y1="'+y+'" x2="'+(pl+iW)+'" y2="'+y+'" stroke="#1e2d42" stroke-width="0.5"/>'; out+='<text x="'+(pl-3)+'" y="'+(y+3)+'" text-anchor="end" fill="#475569" font-size="8" font-family="Consolas,monospace">'+i+'</text>'; }
+  counts.forEach(function(c,i){ var bh=Math.max((c.n/maxC)*iH,c.n>0?2:0),x=pl+i*bW+bW*0.18,bWr=bW*0.64,y=pt+iH-bh,col=c.n>0?'#ef4444':'#1e2d42'; out+='<rect x="'+x+'" y="'+y+'" width="'+bWr+'" height="'+bh+'" fill="'+col+'" rx="2" opacity="0.9"/>'; out+='<text x="'+(x+bWr/2)+'" y="'+(pt+iH+14)+'" text-anchor="middle" fill="#475569" font-size="8" font-family="Consolas,monospace">'+h(c.lbl)+'</text>'; if(c.n>0) out+='<text x="'+(x+bWr/2)+'" y="'+(y-3)+'" text-anchor="middle" fill="#ef4444" font-size="9" font-weight="700">'+c.n+'</text>'; });
+  out+='<line x1="'+pl+'" y1="'+pt+'" x2="'+pl+'" y2="'+(pt+iH)+'" stroke="#2a3a54" stroke-width="1"/>'; out+='<line x1="'+pl+'" y1="'+(pt+iH)+'" x2="'+(pl+iW)+'" y2="'+(pt+iH)+'" stroke="#2a3a54" stroke-width="1"/>';
+  $('chBlk').innerHTML = out;
+}
+function drawReadinessChart(){
+  var W=360,H=160,cx=90,cy=H/2,R=60,ri=38;
+  var buckets=[{lbl:'0–24%',col:'#ef4444',n:0},{lbl:'25–49%',col:'#f97316',n:0},{lbl:'50–74%',col:'#f59e0b',n:0},{lbl:'75–99%',col:'#0ea5e9',n:0},{lbl:'100%',col:'#22c55e',n:0}];
+  db.pcr.forEach(function(p){ var v=calcR(p); if(v<0.25) buckets[0].n++; else if(v<0.5) buckets[1].n++; else if(v<0.75) buckets[2].n++; else if(v<1) buckets[3].n++; else buckets[4].n++; });
+  var total = db.pcr.length;
+  if(!total){ $('chRdy').innerHTML='<text x="'+(W/2)+'" y="'+(H/2+4)+'" text-anchor="middle" fill="#475569" font-size="11">No data</text>'; return; }
+  var out='', startA=-Math.PI/2;
+  buckets.forEach(function(b){ var frac=b.n/total,ang=frac*2*Math.PI; if(ang<0.001) return; var x1=cx+ri*Math.cos(startA),y1=cy+ri*Math.sin(startA),x2=cx+R*Math.cos(startA),y2=cy+R*Math.sin(startA),x3=cx+R*Math.cos(startA+ang),y3=cy+R*Math.sin(startA+ang),x4=cx+ri*Math.cos(startA+ang),y4=cy+ri*Math.sin(startA+ang),lg=ang>Math.PI?1:0; out+='<path d="M'+x1+','+y1+' L'+x2+','+y2+' A'+R+','+R+' 0 '+lg+',1 '+x3+','+y3+' L'+x4+','+y4+' A'+ri+','+ri+' 0 '+lg+',0 '+x1+','+y1+'" fill="'+b.col+'" opacity="0.88"/>'; startA+=ang; });
+  out+='<text x="'+cx+'" y="'+(cy-4)+'" text-anchor="middle" fill="#e2e8f0" font-size="20" font-weight="900" font-family="Consolas,monospace">'+total+'</text>';
+  out+='<text x="'+cx+'" y="'+(cy+13)+'" text-anchor="middle" fill="#64748b" font-size="9">Total PCRs</text>';
+  buckets.forEach(function(b,i){ var lx=170,ly=20+i*28; out+='<rect x="'+lx+'" y="'+ly+'" width="10" height="10" fill="'+b.col+'" rx="2"/>'; out+='<text x="'+(lx+14)+'" y="'+(ly+9)+'" fill="#94a3b8" font-size="10">'+h(b.lbl)+'</text>'; out+='<text x="'+(lx+100)+'" y="'+(ly+9)+'" fill="'+b.col+'" font-size="10" font-weight="700" font-family="Consolas,monospace">'+b.n+'</text>'; });
+  $('chRdy').innerHTML = out;
+}
+function renderOverdue(){
+  var t = todayStr();
+  var rows = db.pcr.filter(function(p){ return (p.forecast&&p.forecast<t) || calcRdy(p)==='No'; }).sort(function(a,b){ return (a.forecast||'9').localeCompare(b.forecast||'9'); });
+  var tb = $('tb-odue');
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="7"><div class="empty"><div class="empty-ico">✅</div><p>No overdue or blocked items</p></div></td></tr>'; return; }
+  tb.innerHTML = rows.map(function(p){ var r=calcR(p),over=p.forecast&&p.forecast<t; return '<tr><td class="mono">'+h(p.id)+'</td><td>'+h(p.equipment)+'</td><td>'+h(p.component)+'</td><td class="mono '+(over?'red-text':'')+'">'+(h(p.forecast)||'&mdash;')+'</td><td>'+rbar(r)+'</td><td class="amb-text" style="font-size:10px">'+(h(calcBN(p))||'&mdash;')+'</td><td>'+badgeYN(calcRdy(p))+'</td></tr>'; }).join('');
+}
+
+// ── PCR TOOL ──
+function renderPCR(){
+  var srch = ($('pcr-srch')?$('pcr-srch').value:'').toLowerCase();
+  var flt  = $('pcr-flt') ? $('pcr-flt').value : '';
+  var rows = db.pcr.filter(function(p){
+    var m = !srch || (p.id||'').toLowerCase().indexOf(srch)>=0 || (p.equipment||'').toLowerCase().indexOf(srch)>=0 || (p.component||'').toLowerCase().indexOf(srch)>=0 || (p.woNumber||'').toLowerCase().indexOf(srch)>=0;
+    var f = !flt  || GATES.some(function(g){ return gstatus(p,g.id)===flt; });
+    return m && f;
+  });
+  var tb = $('tb-pcr');
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="11"><div class="empty"><div class="empty-ico">📋</div><p>No PCR records found. Tap "+ Add PCR" to begin.</p></div></td></tr>'; return; }
+  tb.innerHTML = rows.map(function(p){ var r=calcR(p),bn=calcBN(p),rdy=calcRdy(p),over=isOver(p.forecast);
+    return '<tr style="'+(rdy==='Yes'?'background:rgba(34,197,94,0.04)':'')+'">'+
+      '<td class="mono" style="color:var(--sky)">'+h(p.id)+'</td>'+
+      '<td>'+(h(p.equipment)||'<span class="dim-text">&mdash;</span>')+'</td>'+
+      '<td>'+(h(p.component)||'<span class="dim-text">&mdash;</span>')+'</td>'+
+      '<td class="mono '+(over?'red-text':'')+'">'+(h(p.forecast)||'&mdash;')+'</td>'+
+      '<td class="mono">'+(h(p.woNumber)||'&mdash;')+'</td>'+
+      '<td>'+gateDots(p)+'</td>'+
+      '<td style="min-width:110px">'+rbar(r)+'</td>'+
+      '<td style="font-size:10px;color:var(--amber)">'+(h(bn)||'<span class="grn-text">All clear</span>')+'</td>'+
+      '<td>'+badgeYN(rdy)+'</td>'+
+      '<td class="mono dim-text" style="font-size:9px">'+(h(p.lastUpdated)||'&mdash;')+'</td>'+
+      '<td><div class="act-cell"><button class="btn btn-g btn-xs" data-action="edit-pcr" data-id="'+h(p.id)+'">Edit</button><button class="btn btn-d btn-xs" data-action="del-pcr" data-id="'+h(p.id)+'">Del</button></div></td></tr>';
+  }).join('');
+}
+
+var _mType=null, _mId=null;
+function pcrModal(id){
+  _mType='pcr'; _mId=id;
+  var p = id ? db.pcr.filter(function(x){ return x.id===id; })[0] : null;
+  $('m-title').textContent = id ? 'Edit PCR — '+id : 'New PCR Record';
+  var gHtml = GATES.map(function(g){ var gd=(p&&p.gates&&p.gates[g.id])||{};
+    return '<div class="gate-fc"><div class="fsec-t">'+h(g.lbl)+'</div>'+
+      '<div class="fg"><label>Status</label><select id="g_'+g.id+'_s">'+opts(S_STATUS,gd.status||'')+'</select></div>'+
+      '<div class="fg"><label>Owner</label><input id="g_'+g.id+'_o" value="'+h(gd.owner||'')+'" maxlength="100"></div>'+
+      '<div class="fg"><label>Notes</label><textarea id="g_'+g.id+'_n" rows="2" maxlength="500">'+h(gd.notes||'')+'</textarea></div></div>';
+  }).join('');
+  $('m-body').innerHTML =
+    '<div class="fsec"><div class="fsec-t">PCR Header Information</div><div class="fgrid">'+
+    '<div class="fg"><label>PCR ID *</label><input id="f_id" value="'+h(p&&p.id||'')+'" maxlength="50"></div>'+
+    '<div class="fg"><label>Equipment</label><input id="f_eq" value="'+h(p&&p.equipment||'')+'" maxlength="100"></div>'+
+    '<div class="fg"><label>Component</label><input id="f_comp" value="'+h(p&&p.component||'')+'" maxlength="100"></div>'+
+    '<div class="fg"><label>Forecast Date</label><input type="date" id="f_fc" value="'+h(p&&p.forecast||'')+'"></div>'+
+    '<div class="fg"><label>WO #</label><input id="f_wo" value="'+h(p&&p.woNumber||'')+'" maxlength="50"></div>'+
+    '</div></div><div class="fsec"><div class="fsec-t">Gate Status — G1 through G9</div><div class="gate-fg">'+gHtml+'</div></div>';
+  openModal();
+}
+function savePCR(){
+  var id = ($('f_id').value||'').trim();
+  if(!id){ cdlgAlert('PCR ID is required.'); return; }
+  // Duplicate-ID guard: block if another record (not the one being edited) has this ID
+  var existIdx = db.pcr.map(function(x){ return x.id; }).indexOf(id);
+  var editIdx  = _mId ? db.pcr.map(function(x){ return x.id; }).indexOf(_mId) : -1;
+  if(existIdx >= 0 && existIdx !== editIdx){ cdlgAlert('A PCR with ID "'+id+'" already exists. Choose a unique ID.'); return; }
+  var gates = {};
+  for(var i=0;i<GATES.length;i++){
+    var g=GATES[i];
+    gates[g.id]={status:$('g_'+g.id+'_s').value, owner:$('g_'+g.id+'_o').value.trim().slice(0,100), notes:$('g_'+g.id+'_n').value.trim().slice(0,500)};
+  }
+  var rec={id:id, equipment:$('f_eq').value.trim().slice(0,100), component:$('f_comp').value.trim().slice(0,100), forecast:$('f_fc').value, woNumber:$('f_wo').value.trim().slice(0,50), gates:gates, lastUpdated:todayStr()};
+  if(editIdx>=0) db.pcr[editIdx]=rec; else db.pcr.push(rec);
+  persist(function(ok){
+    closeModal(); renderPCR(); if(curTab==='dash') renderDash();
+    if(ok && storageMode==='file') toast('✓ PCR saved to shared file','ok');
+    else if(ok) toast('✓ PCR saved','ok');
+  });
+}
+function delPCR(id){
+  cdlgConfirm('Delete PCR "'+id+'"?\n\nThis cannot be undone. Export a backup first if needed.', function(){
+    db.pcr = db.pcr.filter(function(x){ return x.id!==id; });
+    persist(function(){ renderPCR(); if(curTab==='dash') renderDash(); toast('PCR deleted','ok'); });
+  }, {danger:true, okText:'Delete'});
+}
+
+// ── COMPONENTS ──
+function renderComp(){
+  var srch = ($('comp-srch')?$('comp-srch').value:'').toLowerCase();
+  var rows = db.comp.filter(function(c){ return !srch||(c.id||'').toLowerCase().indexOf(srch)>=0||(c.name||'').toLowerCase().indexOf(srch)>=0||(c.location||'').toLowerCase().indexOf(srch)>=0||(c.supplier||'').toLowerCase().indexOf(srch)>=0; });
+  var tb = $('tb-comp');
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="12"><div class="empty"><div class="empty-ico">🗄️</div><p>No components. Tap "+ Add Component" to begin.</p></div></td></tr>'; return; }
+  tb.innerHTML = rows.map(function(c){ var overN=isOver(c.nextInspection),lowQ=c.qtyOnHand!=null&&c.qtyOnHand<=1,ret=c.status==='Retired';
+    return '<tr style="'+(ret?'opacity:0.45':'')+'"><td class="mono" style="color:var(--sky)">'+h(c.id)+'</td><td>'+h(c.name)+'</td><td>'+(h(c.equipmentType)||'&mdash;')+'</td><td>'+(h(c.location)||'&mdash;')+'</td><td>'+badgeCS(c.status)+'</td><td class="mono" style="font-size:9px">'+(h(c.lastInspection)||'&mdash;')+'</td><td class="mono '+(lowQ?'amb-text':'')+'" style="text-align:right">'+(c.qtyOnHand!=null?c.qtyOnHand:'&mdash;')+'</td><td>'+(h(c.leadTime)||'&mdash;')+'</td><td>'+(h(c.supplier)||'&mdash;')+'</td><td class="mono '+(overN?'red-text':'')+'" style="font-size:9px">'+(h(c.nextInspection)||'&mdash;')+'</td><td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;color:var(--textd)">'+(h(c.notes)||'&mdash;')+'</td><td><div class="act-cell"><button class="btn btn-g btn-xs" data-action="edit-comp" data-id="'+h(c.id)+'">Edit</button><button class="btn btn-d btn-xs" data-action="del-comp" data-id="'+h(c.id)+'">Del</button></div></td></tr>';
+  }).join('');
+}
+function compModal(id){
+  _mType='comp'; _mId=id;
+  var c = id ? db.comp.filter(function(x){ return x.id===id; })[0] : null;
+  $('m-title').textContent = id ? 'Edit Component — '+id : 'New Component';
+  $('m-body').innerHTML =
+    '<div class="fsec"><div class="fsec-t">Component Details</div><div class="fgrid">'+
+    '<div class="fg"><label>Component ID *</label><input id="c_id" value="'+h(c&&c.id||'')+'" maxlength="50"></div>'+
+    '<div class="fg"><label>Name</label><input id="c_nm" value="'+h(c&&c.name||'')+'" maxlength="100"></div>'+
+    '<div class="fg"><label>Equipment Type</label><input id="c_eq" value="'+h(c&&c.equipmentType||'')+'" maxlength="100"></div>'+
+    '<div class="fg"><label>Location</label><input id="c_loc" value="'+h(c&&c.location||'')+'" maxlength="100"></div>'+
+    '<div class="fg"><label>Status</label><select id="c_st">'+opts(S_CSTATUS,c&&c.status||'')+'</select></div>'+
+    '<div class="fg"><label>Last Inspection</label><input type="date" id="c_li" value="'+h(c&&c.lastInspection||'')+'"></div>'+
+    '<div class="fg"><label>Qty On Hand</label><input type="number" inputmode="numeric" id="c_qty" min="0" max="999999" value="'+(c&&c.qtyOnHand!=null?c.qtyOnHand:0)+'"></div>'+
+    '<div class="fg"><label>Lead Time</label><input id="c_lt" value="'+h(c&&c.leadTime||'')+'" maxlength="50" placeholder="e.g. 2 weeks"></div>'+
+    '<div class="fg"><label>Supplier</label><input id="c_sup" value="'+h(c&&c.supplier||'')+'" maxlength="100"></div>'+
+    '<div class="fg"><label>Next Inspection</label><input type="date" id="c_ni" value="'+h(c&&c.nextInspection||'')+'"></div>'+
+    '<div class="fg full"><label>Notes</label><textarea id="c_nt" rows="3" maxlength="1000">'+h(c&&c.notes||'')+'</textarea></div>'+
+    '</div></div>';
+  openModal();
+}
+function saveComp(){
+  var id = ($('c_id').value||'').trim();
+  if(!id){ cdlgAlert('Component ID is required.'); return; }
+  var existIdx = db.comp.map(function(x){ return x.id; }).indexOf(id);
+  var editIdx  = _mId ? db.comp.map(function(x){ return x.id; }).indexOf(_mId) : -1;
+  if(existIdx >= 0 && existIdx !== editIdx){ cdlgAlert('A component with ID "'+id+'" already exists. Choose a unique ID.'); return; }
+  var qty = parseInt($('c_qty').value, 10);
+  if(isNaN(qty) || qty < 0) qty = 0;
+  var rec={id:id, name:$('c_nm').value.trim().slice(0,100), equipmentType:$('c_eq').value.trim().slice(0,100), location:$('c_loc').value.trim().slice(0,100), status:$('c_st').value, lastInspection:$('c_li').value, qtyOnHand:Math.min(qty,999999), leadTime:$('c_lt').value.trim().slice(0,50), supplier:$('c_sup').value.trim().slice(0,100), nextInspection:$('c_ni').value, notes:$('c_nt').value.trim().slice(0,1000)};
+  if(editIdx>=0) db.comp[editIdx]=rec; else db.comp.push(rec);
+  persist(function(ok){ closeModal(); renderComp(); if(ok) toast('✓ Component saved','ok'); });
+}
+function delComp(id){ cdlgConfirm('Delete component "'+id+'"?', function(){ db.comp=db.comp.filter(function(x){ return x.id!==id; }); persist(function(){ renderComp(); toast('Component deleted','ok'); }); }, {danger:true,okText:'Delete'}); }
+
+// ── EXCEPTIONS ──
+function renderExc(){
+  var srch = ($('exc-srch')?$('exc-srch').value:'').toLowerCase();
+  var sev  = $('exc-sev') ? $('exc-sev').value : '';
+  var esc  = $('exc-esc') ? $('exc-esc').value : '';
+  var rows = db.exc.filter(function(e){ var m=!srch||(e.id||'').toLowerCase().indexOf(srch)>=0||(e.pcrId||'').toLowerCase().indexOf(srch)>=0||(e.owner||'').toLowerCase().indexOf(srch)>=0||(e.blockerType||'').toLowerCase().indexOf(srch)>=0; return m&&(!sev||e.severity===sev)&&(!esc||e.escStatus===esc); });
+  var tb = $('tb-exc');
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="11"><div class="empty"><div class="empty-ico">✅</div><p>No exceptions logged matching filters.</p></div></td></tr>'; return; }
+  tb.innerHTML = rows.map(function(e){ var age=ageDays(e.openDate),old=age!=null&&age>7&&e.escStatus!=='Resolved',res=e.escStatus==='Resolved';
+    return '<tr style="'+(res?'opacity:0.45':'')+'"><td class="mono" style="color:var(--sky)">'+h(e.id)+'</td><td class="mono">'+(h(e.pcrId)||'&mdash;')+'</td><td style="font-size:10px">'+(h(e.gate)||'&mdash;')+'</td><td>'+(h(e.blockerType)||'&mdash;')+'</td><td>'+badgeSev(e.severity)+'</td><td>'+(h(e.owner)||'&mdash;')+'</td><td class="mono" style="font-size:9px">'+(h(e.openDate)||'&mdash;')+'</td><td class="mono '+(old?'red-text':'')+'" style="font-weight:'+(old?'700':'400')+'">'+(age!=null?age:'&mdash;')+'</td><td>'+badgeEsc(e.escStatus)+'</td><td class="mono" style="font-size:9px">'+(h(e.resolutionDate)||'&mdash;')+'</td><td><div class="act-cell"><button class="btn btn-g btn-xs" data-action="edit-exc" data-id="'+h(e.id)+'">Edit</button><button class="btn btn-d btn-xs" data-action="del-exc" data-id="'+h(e.id)+'">Del</button></div></td></tr>';
+  }).join('');
+}
+function excModal(id){
+  _mType='exc'; _mId=id;
+  var e = id ? db.exc.filter(function(x){ return x.id===id; })[0] : null;
+  $('m-title').textContent = id ? 'Edit Exception — '+id : 'Log New Exception';
+  var gateOpts = [''].concat(GATES.map(function(g){ return g.lbl; })).map(function(o){ return '<option'+((e&&e.gate||'')===o?' selected':'')+'>'+h(o)+'</option>'; }).join('');
+  $('m-body').innerHTML =
+    '<div class="fsec"><div class="fsec-t">Exception Details</div><div class="fgrid">'+
+    '<div class="fg"><label>Exception ID *</label><input id="e_id" value="'+h(e&&e.id||uid('EXC'))+'" maxlength="50"></div>'+
+    '<div class="fg"><label>PCR ID</label><input id="e_pcr" value="'+h(e&&e.pcrId||'')+'" maxlength="50"></div>'+
+    '<div class="fg"><label>Gate</label><select id="e_gt">'+gateOpts+'</select></div>'+
+    '<div class="fg"><label>Blocker Type</label><input id="e_bt" value="'+h(e&&e.blockerType||'')+'" maxlength="100" placeholder="Parts / Engineering / Access…"></div>'+
+    '<div class="fg"><label>Severity</label><select id="e_sv">'+opts(S_SEV,e&&e.severity||'')+'</select></div>'+
+    '<div class="fg"><label>Owner</label><input id="e_ow" value="'+h(e&&e.owner||'')+'" maxlength="100"></div>'+
+    '<div class="fg"><label>Open Date</label><input type="date" id="e_od" value="'+h(e&&e.openDate||todayStr())+'"></div>'+
+    '<div class="fg"><label>Escalation Status</label><select id="e_es">'+opts(S_ESC,e&&e.escStatus||'')+'</select></div>'+
+    '<div class="fg"><label>Resolution Date</label><input type="date" id="e_rd" value="'+h(e&&e.resolutionDate||'')+'"></div>'+
+    '<div class="fg full"><label>Closure Notes</label><textarea id="e_cn" rows="3" maxlength="1000">'+h(e&&e.closureNotes||'')+'</textarea></div>'+
+    '</div></div>';
+  openModal();
+}
+function saveExc(){
+  var id = ($('e_id').value||'').trim();
+  if(!id){ cdlgAlert('Exception ID is required.'); return; }
+  var existIdx = db.exc.map(function(x){ return x.id; }).indexOf(id);
+  var editIdx  = _mId ? db.exc.map(function(x){ return x.id; }).indexOf(_mId) : -1;
+  if(existIdx >= 0 && existIdx !== editIdx){ cdlgAlert('An exception with ID "'+id+'" already exists. Choose a unique ID.'); return; }
+  var esc = $('e_es').value, rd = $('e_rd').value;
+  if(esc==='Resolved' && !rd){ cdlgAlert('A Resolution Date is required before marking an exception Resolved.'); return; }
+  var rec={id:id, pcrId:$('e_pcr').value.trim().slice(0,50), gate:$('e_gt').value, blockerType:$('e_bt').value.trim().slice(0,100), severity:$('e_sv').value, owner:$('e_ow').value.trim().slice(0,100), openDate:$('e_od').value, escStatus:esc, resolutionDate:rd, closureNotes:$('e_cn').value.trim().slice(0,1000)};
+  if(editIdx>=0) db.exc[editIdx]=rec; else db.exc.push(rec);
+  persist(function(ok){ closeModal(); renderExc(); if(curTab==='dash') renderDash(); if(ok) toast('✓ Exception saved','ok'); });
+}
+function delExc(id){ cdlgConfirm('Delete exception "'+id+'"?', function(){ db.exc=db.exc.filter(function(x){ return x.id!==id; }); persist(function(){ renderExc(); if(curTab==='dash') renderDash(); toast('Exception deleted','ok'); }); }, {danger:true,okText:'Delete'}); }
+
+// ── MODAL ──
+function openModal(){ $('overlay').classList.add('on'); }
+function closeModal(){ $('overlay').classList.remove('on'); _mType=null; _mId=null; }
+function saveModal(){ if(_mType==='pcr') savePCR(); else if(_mType==='comp') saveComp(); else if(_mType==='exc') saveExc(); }
+
+// ── EXPORT / IMPORT ──
+async function doExport(){
+  try {
+    var ts = todayStr().replace(/-/g,'');
+    var txt;
+    if(sessionPass && CRYPTO_SUPPORTED){
+      txt = await encryptObj(db, sessionPass);
+    } else {
+      txt = JSON.stringify(db, null, 2);
+    }
+    var bl = new Blob([txt], {type:'application/json'});
+    var fname = 'PCR_' + (sessionPass ? 'enc_' : '') + ts + '.json';
+    if(navigator.msSaveBlob){ navigator.msSaveBlob(bl, fname); toast('✓ Backup exported — ' + fname, 'ok'); return; }
+    var url = URL.createObjectURL(bl);
+    var a   = document.createElement('a');
+    a.href  = url; a.download = fname; a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); if(a.parentNode) a.parentNode.removeChild(a); }, 1500);
+    toast('✓ Backup exported — ' + fname, 'ok');
+  } catch(err){ toast('❌ Export failed: ' + err.message, 'err'); }
+}
+
+var PCR_FIELDS  = ['id','equipment','component','forecast','woNumber','lastUpdated','gates'];
+var COMP_FIELDS = ['id','name','equipmentType','location','status','lastInspection','qtyOnHand','leadTime','supplier','nextInspection','notes'];
+var EXC_FIELDS  = ['id','pcrId','gate','blockerType','severity','owner','openDate','escStatus','resolutionDate','closureNotes'];
+
+function validateImport(p){
+  if(typeof p!=='object'||p===null||Array.isArray(p)) throw new Error('Root value must be a JSON object.');
+  ['pcr','comp','exc'].forEach(function(k){ if(!Array.isArray(p[k])) throw new Error('"'+k+'" must be an array.'); });
+  if(p.pcr.length  > IMPORT_MAX_RECORDS) throw new Error('Too many PCR records (max '+IMPORT_MAX_RECORDS+').');
+  if(p.comp.length > IMPORT_MAX_RECORDS) throw new Error('Too many component records (max '+IMPORT_MAX_RECORDS+').');
+  if(p.exc.length  > IMPORT_MAX_RECORDS) throw new Error('Too many exception records (max '+IMPORT_MAX_RECORDS+').');
+
+  function checkStr(val, label){
+    if(typeof val==='string' && val.length > IMPORT_MAX_STR)
+      throw new Error(label+' exceeds '+IMPORT_MAX_STR+'-char limit.');
+  }
+  function checkRecord(rec, allowed, label){
+    if(typeof rec!=='object'||rec===null) throw new Error(label+' is not an object.');
+    Object.keys(rec).forEach(function(k){
+      if(allowed.indexOf(k)<0) throw new Error(label+': unexpected field "'+k+'".');
+      if(typeof rec[k]==='string') checkStr(rec[k], label+'.'+k);
+    });
+  }
+  function checkGates(rec, label){
+    if(rec.gates === undefined) return;
+    if(typeof rec.gates!=='object'||Array.isArray(rec.gates)||rec.gates===null)
+      throw new Error(label+'.gates must be an object.');
+    Object.keys(rec.gates).forEach(function(gk){
+      if(GATE_IDS.indexOf(gk)<0) throw new Error(label+'.gates: unknown gate id "'+gk+'".');
+      var go = rec.gates[gk];
+      if(typeof go!=='object'||go===null||Array.isArray(go))
+        throw new Error(label+'.gates.'+gk+' must be an object.');
+      Object.keys(go).forEach(function(f){
+        if(GATE_FIELDS.indexOf(f)<0) throw new Error(label+'.gates.'+gk+': unexpected field "'+f+'".');
+        if(typeof go[f]==='string') checkStr(go[f], label+'.gates.'+gk+'.'+f);
+      });
+      if(go.status && GATE_STATUS_VALS.indexOf(go.status)<0)
+        throw new Error(label+'.gates.'+gk+'.status: invalid value "'+go.status+'".');
+    });
+  }
+  p.pcr.forEach(function(r,i){ checkRecord(r,PCR_FIELDS,'pcr['+i+']'); checkGates(r,'pcr['+i+']'); });
+  p.comp.forEach(function(r,i){ checkRecord(r,COMP_FIELDS,'comp['+i+']'); });
+  p.exc.forEach(function(r,i){ checkRecord(r,EXC_FIELDS,'exc['+i+']'); });
+}
+
+function doImport(){ $('filePicker').click(); }
+function onImportFile(e){
+  var f = e.target.files[0];
+  if(!f){ e.target.value=''; return; }
+  var rdr = new FileReader();
+  rdr.onerror = function(){ toast('❌ File could not be read. It may be corrupt or inaccessible.','err'); e.target.value=''; };
+  rdr.onload  = async function(ev){
+    e.target.value = '';   // reset picker so same file can be re-imported
+    try {
+      var raw = ev.target.result;
+      var parsed;
+      try { parsed = JSON.parse(raw); }
+      catch(je){ toast('❌ Import failed: Invalid JSON — ' + je.message,'err'); return; }
+
+      // Handle encrypted backup
+      if(parsed.enc === 1){
+        if(!CRYPTO_SUPPORTED){ toast('❌ Encrypted import not supported in this browser.','err'); return; }
+        if(!sessionPass){
+          cdlgInput('This backup is encrypted.\nEnter its password:', 'Password…', async function(pass){
+            if(!pass){ toast('❌ Password required.','err'); return; }
+            try { parsed = await decryptObj(raw, pass); }
+            catch(de){ toast('❌ Wrong password or corrupted backup.','err'); return; }
+            _finishImport(f.name, parsed);
+          });
+          return;
+        }
+        try { parsed = await decryptObj(raw, sessionPass); }
+        catch(de){ toast('❌ Decryption failed — wrong password? Click 🔓 to update.','err'); return; }
+      }
+      _finishImport(f.name, parsed);
+    } catch(err){ toast('❌ Import failed: ' + err.message,'err'); }
+  };
+  rdr.readAsText(f);
+}
+function _finishImport(fname, parsed){
+  try { validateImport(parsed); }
+  catch(ve){ toast('❌ Validation error: ' + ve.message,'err'); return; }
+  cdlgConfirm(
+    'Import "'+fname+'"?\n\nThis REPLACES all current data ('+db.pcr.length+' PCRs, '+db.comp.length+' components, '+db.exc.length+' exceptions).\n\nIf connected to a shared file, imported data will be written to it.\n\nExport a backup first if needed.',
+    function(){
+      db = normalizeDB(parsed);
+      persist(function(){ go(curTab); toast('✅ Import complete — '+db.pcr.length+' PCRs | '+db.comp.length+' components | '+db.exc.length+' exceptions','ok'); });
+    },
+    {okText:'Import'}
+  );
+}
+
+// ── TOAST ──
+var _toastTimer = null;
+function toast(msg, cls){
+  var el = $('toast');
+  el.textContent = msg;    // textContent: safe
+  el.className = cls || '';
+  el.style.display = 'block';
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(function(){ el.style.display='none'; }, 3600);
+}
+
+// ── DELEGATED CLICK ──
+document.addEventListener('click', function(ev){
+  var btn = ev.target.closest('[data-action]');
+  if(!btn) return;
+  var action = btn.getAttribute('data-action');
+  var id     = btn.getAttribute('data-id');
+  switch(action){
+    case 'add-pcr':  pcrModal(null);  break;
+    case 'edit-pcr': pcrModal(id);    break;
+    case 'del-pcr':  delPCR(id);      break;
+    case 'add-comp': compModal(null); break;
+    case 'edit-comp':compModal(id);   break;
+    case 'del-comp': delComp(id);     break;
+    case 'add-exc':  excModal(null);  break;
+    case 'edit-exc': excModal(id);    break;
+    case 'del-exc':  delExc(id);      break;
+  }
+});
+
+// ── BIND UI ──
+function bindUI(){
+  var tabs = document.querySelectorAll('.tab');
+  for(var i=0;i<tabs.length;i++){ (function(t){ t.addEventListener('click',function(){ go(t.getAttribute('data-tab')); }); })(tabs[i]); }
+
+  $('btn-setpass').addEventListener('click', function(){
+    if(!CRYPTO_SUPPORTED){ cdlgAlert('Web Crypto API is not available in this browser.\nEncryption requires Chrome or Edge on a modern OS.'); return; }
+    if(sessionPass){
+      cdlgConfirm(
+        'Remove the current encryption password?\n\nNew saves will be written as plain (unencrypted) JSON.',
+        function(){ setPass(''); toast('🔓 Encryption password cleared. Future saves will be unencrypted.','ok'); },
+        {okText:'Remove Password', danger:true}
+      );
+    } else {
+      cdlgInput(
+        'Set a team password to encrypt the shared file.\n\nAll teammates must use the same password.\nShare it securely — not via email or chat.\n\nMinimum 8 characters recommended.',
+        'Enter password…',
+        function(pass){
+          if(!pass || pass.length < 4){ cdlgAlert('Password must be at least 4 characters.'); return; }
+          setPass(pass);
+          toast('🔒 Password set. Your next save will encrypt the file.','ok');
+        }
+      );
+    }
+  });
+
+  $('btn-openfile').addEventListener('click', function(){
+    if(!FS_SUPPORTED){ cdlgAlert('This browser does not support opening a shared file.\n\nUse Google Chrome or Microsoft Edge on Windows for team-synced mode. On this device the tool runs in local-only mode — use Export/Import to move data.'); return; }
+    openSharedFile();
+  });
+  $('btn-reload').addEventListener('click', function(){ if(fileHandle) readFromFile(false).then(function(){ go(curTab); }); });
+  $('btn-import').addEventListener('click', doImport);
+  $('btn-export').addEventListener('click', function(){ doExport(); });
+  $('filePicker').addEventListener('change', onImportFile);
+  $('m-close').addEventListener('click', closeModal);
+  $('m-cancel').addEventListener('click', closeModal);
+  $('m-save').addEventListener('click', saveModal);
+  $('overlay').addEventListener('click', function(ev){ if(ev.target===this) closeModal(); });
+  $('pcr-srch').addEventListener('input', renderPCR);
+  $('pcr-flt').addEventListener('change', renderPCR);
+  $('comp-srch').addEventListener('input', renderComp);
+  $('exc-srch').addEventListener('input', renderExc);
+  $('exc-sev').addEventListener('change', renderExc);
+  $('exc-esc').addEventListener('change', renderExc);
+  document.addEventListener('keydown', function(ev){ if(ev.key==='Escape'){ closeModal(); $('cdlg').classList.remove('on'); } });
+  $('cdlg').addEventListener('click', function(ev){ if(ev.target===this) this.classList.remove('on'); });
+}
+
+// ── CLOCK ──
+function tick(){ var n=new Date(); $('hd-ts').textContent = n.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})+' · '+n.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }
+
+// ── INIT ──
+(function init(){
+  if(storageMode==='local'){
+    loadLocal();
+    showBanner("This browser can't open a shared file — running in LOCAL-ONLY mode (data not synced to the team). Use Chrome or Edge on Windows for shared mode. Export/Import to move data.");
+  } else {
+    db = {pcr:[], comp:[], exc:[]};
+    showBanner('Click "📂 Open shared file" and pick pcr-data.json to load your team\'s data. Optionally set an encryption password first.');
+  }
+  bindUI();
+  updateEncBtn();
+  setFileStatus();
+  tick();
+  var _clockInterval = setInterval(tick, 30000);
+  window.addEventListener('beforeunload', function(){ clearInterval(_clockInterval); });
+  renderDash();
+})();
+</script>
+</body>
+</html>
